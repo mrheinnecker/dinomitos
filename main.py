@@ -10,8 +10,8 @@ img_chrom_raw = tifffile.imread("/g/schwab/Marco/Chandni_mitodino/CellE_chromoso
 img_npc_raw = tifffile.imread("/g/schwab/Marco/Chandni_mitodino/CellE_NPCs.tif")
 
 
-img_npc = img_npc_raw[0:900, 600:1500, 800:920]
-img_chrom = img_chrom_raw[0:900, 600:1500, 800:920]
+img_npc = img_npc_raw#[0:900, 600:1500, 800:920]
+img_chrom = img_chrom_raw#[0:900, 600:1500, 800:920]
 
 
 #tifffile.imwrite('/g/schwab/Marco/Chandni_mitodino/crop_CellE_NPCs.tif', img_npc.astype(np.uint8))
@@ -30,57 +30,69 @@ img_chrom = img_chrom_raw[0:900, 600:1500, 800:920]
 ## connected components
 labeled, num_features = label(img_npc)
 
-#unique, counts = np.unique(labeled, return_counts=True)
-#print("Voxel counts:", dict(zip(unique, counts)))
-
-
-output = np.zeros_like(img_npc)
-
-## center of mass for each connected component
-
-for i in range(1, num_features + 1):
-    print(f"Center of mass {i} of {num_features}...")
-    com = center_of_mass(img_npc, labeled, i)
-    # Round to nearest voxel coordinate
-    com_voxel = tuple(map(int, np.round(com)))
-    output[com_voxel] = 1
 
 
 
 
-#tifffile.imwrite('/g/schwab/Marco/Chandni_mitodino/npc_centers.tif', output.astype(np.uint8))
 
-#unique, counts = np.unique(output, return_counts=True)
-#print("Voxel counts:", dict(zip(unique, counts)))
+#object_ids = np.unique(labeled)
+object_ids = np.arange(1,num_features+1)
+#object_ids = object_ids[object_ids != 0]  # remove background (label 0)
+
+com_results = []
+
+for obj_id in object_ids:
+    print(f"Center of mass {obj_id} of {max(object_ids)}...")
+    # Get all voxel coordinates for this object
+    coords = np.argwhere(labeled == obj_id)
+
+    # Get bounding box around the object
+    zmin, ymin, xmin = coords.min(axis=0)
+    zmax, ymax, xmax = coords.max(axis=0) + 1  # +1 because slicing is exclusive
+
+    # Crop a small subvolume around the object
+    subvol = labeled[zmin:zmax, ymin:ymax, xmin:xmax]
+
+    # Create a binary mask within this subvolume (where subvol == obj_id)
+    mask = (subvol == obj_id)
+
+    # Compute center of mass in the cropped subvolume
+    local_com = center_of_mass(mask)
+
+    # Translate local CoM back to global image coordinates
+    global_com = (local_com[0] + zmin, local_com[1] + ymin, local_com[2] + xmin)
+
+    # Store result
+    com_results.append({
+        "object_id": int(obj_id),
+        "z": global_com[0],
+        "y": global_com[1],
+        "x": global_com[2]
+    })
 
 
-positions = np.argwhere(output == 1)
-
-df_positions = pd.DataFrame(positions, columns=["z", "y", "x"])
+df_com = pd.DataFrame(com_results)
 
 
-source_positions = np.argwhere(output == 1)
+dist_results = []
 
-# Get positions of target voxels (value > 0 in 'img_chrom')
-target_positions = np.argwhere(img_chrom > 0)
+for idx, row in df_com.iterrows():
+    print(f"Distance measurement {idx + 1} of {len(df_com)}...")
 
-# Prepare list to collect results
-results = []
+    # Source position as array
+    source = np.array([row["z"], row["y"], row["x"]])
 
-# Loop over each source voxel
-for idx, source in enumerate(source_positions):
-    print(f"Dinstance measurement {idx} of {len(source_positions)}...")
-    # Compute all Euclidean distances to target voxels
+    # Compute all distances to target positions
     distances = np.linalg.norm(target_positions - source, axis=1)
 
-    # Find closest voxel index and its distance
+    # Find closest voxel
     min_idx = np.argmin(distances)
     min_dist = distances[min_idx]
     closest_voxel = target_positions[min_idx]
 
-    # Store result as a dictionary
-    results.append({
-        "id": idx,
+    # Store result
+    dist_results.append({
+        "id": int(row["object_id"]),
         "source_z": source[0],
         "source_y": source[1],
         "source_x": source[2],
@@ -90,14 +102,12 @@ for idx, source in enumerate(source_positions):
         "target_x": closest_voxel[2]
     })
 
-# Convert to DataFrame
-df_results = pd.DataFrame(results)
+# Create result DataFrame
+df_results = pd.DataFrame(dist_results)
+
+
 
 df_results.to_csv("/g/schwab/Marco/projects/dinomitos/distance_test.tsv", sep="\t", index=False)
-
-
-
-
 
 
 
